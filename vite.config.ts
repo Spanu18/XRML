@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import basicSsl from '@vitejs/plugin-basic-ssl'
+import tailwindcss from '@tailwindcss/vite'
 
 /**
  * `yarn dev` stays plain HTTP on localhost — which is a secure context, so
@@ -16,6 +17,6 @@ import basicSsl from '@vitejs/plugin-basic-ssl'
 const xrMode = process.env.XRML_HTTPS === '1'
 
 export default defineConfig({
-  plugins: xrMode ? [basicSsl()] : [],
+  plugins: xrMode ? [basicSsl(), tailwindcss()] : [tailwindcss()],
   server: xrMode ? { host: true } : {},
 })

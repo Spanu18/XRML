@@ -1,3 +1,14 @@
+@import "tailwindcss";
+
+/*
+ * daisyUI only emits `light` and `dark` unless a theme is named here, so a
+ * `data-theme` the plugin wasn't told about selects a ruleset that doesn't
+ * exist and nothing changes.
+ */
+@plugin "daisyui" {
+  themes: light --default, dark --prefersdark, cyberpunk, retro, valentine, aqua;
+}
+
 /*
  * Page chrome only. Everything spatial is drawn into the WebGL canvas, which
  * the stage inserts and positions itself.

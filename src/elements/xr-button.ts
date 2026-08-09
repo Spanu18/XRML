@@ -5,17 +5,12 @@ import {
   registerInteractive,
   unregisterInteractive,
 } from '../core/interaction.ts'
-import { parseClasses } from '../style/parse.ts'
-import type { Style, StyleSet } from '../style/parse.ts'
+import { readStyleSet } from '../style/computed.ts'
+import type { Style, StyleSet } from '../style/computed.ts'
 import { createCardGeometry, createCardMaterial } from '../style/card.ts'
 import type { CardMaterial } from '../style/card.ts'
 import { fontFor } from '../style/fonts.ts'
-import {
-  CARD_BEVEL_PX,
-  CARD_DEPTH_PX,
-  LINE_HEIGHT,
-  PIXELS_PER_UNIT,
-} from '../style/tokens.ts'
+import { CARD_BEVEL_PX, LINE_HEIGHT, PIXELS_PER_UNIT } from '../style/units.ts'
 
 /** How dark the card's sides fall relative to its face. */
 const EDGE_SHADE = 0.55
@@ -36,18 +31,38 @@ const TEXT_DEPTH_OFFSET = -1
 type CardMesh = THREE.Mesh<THREE.ExtrudeGeometry, CardMaterial>
 type StateColors = { base: THREE.Color; hover: THREE.Color }
 
-function backgroundColor(style: Style): THREE.Color {
-  return new THREE.Color(
-    style.background === 'transparent' ? '#000000' : style.background,
-  )
-}
+/**
+ * Default styling, in the lowest cascade layer — any page CSS overrides it.
+ * Written as CSS rather than as a JS fallback so it takes part in the cascade
+ * like everything else: `class="bg-teal-500"` beats it for the same reason it
+ * would beat any other author rule.
+ */
+const DEFAULTS = `
+  background-color: #334155;
+  color: #ffffff;
+  font-size: 1rem;
+  font-weight: 500;
+  padding: 0.75rem 1.25rem;
+  border-radius: 0.25rem;
+`
 
-function backgroundOpacity(style: Style): number {
-  return style.background === 'transparent' ? 0 : 1
+/**
+ * The card's corner radius in world units.
+ *
+ * A percentage radius is relative to the box, which only exists once the label
+ * has been measured — and it describes an ellipse, which the card can't be, so
+ * it resolves against the shorter side. That reads as the intended pill for the
+ * `50%` case and stays inside the corner for everything below it.
+ */
+function cornerRadius(style: Style, width: number, height: number): number {
+  if (style.radiusFraction !== null) {
+    return style.radiusFraction * Math.min(width, height)
+  }
+  return style.radius / PIXELS_PER_UNIT
 }
 
 /**
- * `<xr-button>` — a spatial button styled with utility classes.
+ * `<xr-button>` — a spatial button styled with ordinary CSS.
  *
  * ```html
  * <xr-button class="bg-teal-500 hover:bg-teal-400 text-white p-4 rounded-lg"
@@ -55,9 +70,14 @@ function backgroundOpacity(style: Style): number {
  *            onclick="doSomething()">Click me</xr-button>
  * ```
  *
+ * Style comes from the browser's computed style, not from reading the class
+ * names, so utility classes, component classes like daisyUI's `.btn`, a plain
+ * stylesheet and an inline `style` attribute all work and compose the way they
+ * do everywhere else on the page.
+ *
  * The body is one extruded rounded rectangle and the label is SDF text, so both
- * stay sharp at any viewing distance. `hover:` variants change colour only — a
- * hover that resized the card would make the button jump under the pointer.
+ * stay sharp at any viewing distance. Hover changes colour only — a hover that
+ * resized the card would make the button jump under the pointer.
  */
 export class XRButtonElement extends XRElement {
   private text: Text | null = null
@@ -70,7 +90,7 @@ export class XRButtonElement extends XRElement {
   private generation = 0
 
   protected build(): void {
-    const styles = parseClasses(this.getAttribute('class') ?? '')
+    const styles = readStyleSet(this)
     this.styles = styles
 
     const generation = (this.generation += 1)
@@ -101,30 +121,36 @@ export class XRButtonElement extends XRElement {
   private layout(styles: StyleSet, text: Text): void {
     const base = styles.base
     const bounds = text.textRenderInfo?.blockBounds
-    const textWidth = bounds ? bounds[2] - bounds[0] : 0
+    const textWidthPx = (bounds ? bounds[2] - bounds[0] : 0) * PIXELS_PER_UNIT
 
-    const padTop = base.paddingTop / PIXELS_PER_UNIT
-    const padRight = base.paddingRight / PIXELS_PER_UNIT
-    const padBottom = base.paddingBottom / PIXELS_PER_UNIT
-    const padLeft = base.paddingLeft / PIXELS_PER_UNIT
+    // Everything below is in design pixels, so CSS lengths need no conversion
+    // and the box arithmetic reads the way the equivalent CSS would.
+    const contentWidth = textWidthPx + base.paddingLeft + base.paddingRight
+    const contentHeight =
+      base.fontSize * LINE_HEIGHT + base.paddingTop + base.paddingBottom
 
-    const width = Math.max(textWidth + padLeft + padRight, MIN_SIZE)
-    const height = Math.max(
-      (base.fontSize / PIXELS_PER_UNIT) * LINE_HEIGHT + padTop + padBottom,
-      MIN_SIZE,
-    )
+    // An explicit size wins over the content, and includes the padding: pages
+    // that reach us have `box-sizing: border-box`, and a component class like
+    // `.btn` sizes itself by height with no vertical padding at all.
+    const widthPx = Math.max(base.width ?? contentWidth, base.minWidth)
+    const heightPx = Math.max(base.height ?? contentHeight, base.minHeight)
+
+    const width = Math.max(widthPx / PIXELS_PER_UNIT, MIN_SIZE)
+    const height = Math.max(heightPx / PIXELS_PER_UNIT, MIN_SIZE)
 
     // Asymmetric padding shifts the label off centre, as it would in CSS.
-    text.position.x = (padLeft - padRight) / 2
-    text.position.y = (padBottom - padTop) / 2
+    text.position.x =
+      (base.paddingLeft - base.paddingRight) / 2 / PIXELS_PER_UNIT
+    text.position.y =
+      (base.paddingBottom - base.paddingTop) / 2 / PIXELS_PER_UNIT
 
     this.cardColors = {
-      base: backgroundColor(base),
-      hover: backgroundColor(styles.hover),
+      base: new THREE.Color(base.background.color),
+      hover: new THREE.Color(styles.hover.background.color),
     }
     this.cardOpacity = {
-      base: backgroundOpacity(base),
-      hover: backgroundOpacity(styles.hover),
+      base: base.background.opacity,
+      hover: styles.hover.background.opacity,
     }
 
     const blended = this.cardOpacity.base < 1 || this.cardOpacity.hover < 1
@@ -133,8 +159,8 @@ export class XRButtonElement extends XRElement {
       createCardGeometry(
         width,
         height,
-        base.radius / PIXELS_PER_UNIT,
-        CARD_DEPTH_PX / PIXELS_PER_UNIT,
+        cornerRadius(base, width, height),
+        base.depth / PIXELS_PER_UNIT,
         CARD_BEVEL_PX / PIXELS_PER_UNIT,
       ),
       createCardMaterial(
@@ -192,7 +218,7 @@ export class XRButtonElement extends XRElement {
   }
 }
 
-defineElement('xr-button', XRButtonElement)
+defineElement('xr-button', XRButtonElement, DEFAULTS)
 
 declare global {
   interface HTMLElementTagNameMap {

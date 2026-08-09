@@ -26,8 +26,38 @@ export type CardMaterial = THREE.ShaderMaterial & {
  */
 const CURVE_SEGMENTS = 20
 
-/** Rings across the bevel. Two is enough to read as a chamfer, not a crease. */
-const BEVEL_SEGMENTS = 2
+/** Rings across a chamfer. Two is enough to read as a chamfer, not a crease. */
+const MIN_BEVEL_SEGMENTS = 2
+
+/** Rings across a fully rolled edge, where the profile is a real quarter-circle. */
+const MAX_BEVEL_SEGMENTS = 8
+
+/**
+ * How far the face rolls over into the sides.
+ *
+ * CSS has one radius and no depth, so the depth axis has to be inferred. Taking
+ * it from the radius in absolute pixels doesn't work — the card is only 5px
+ * deep, so every radius from `rounded-sm` upwards would saturate and look
+ * identical. What actually distinguishes a pill from a rounded rectangle is how
+ * round it is *relative to the box*: `rounded-full` is a radius that has grown
+ * to half the shorter side, and that is the case that should read as a solid
+ * with a semicircular edge rather than a flat slab with rounded corners.
+ *
+ * So the roll tracks that fraction. A square-cornered card keeps its bare
+ * chamfer, `rounded-lg` on a typical button lifts to well under a pixel, and
+ * `rounded-full` rolls the full half-depth into a capsule.
+ */
+function edgeRoll(
+  width: number,
+  height: number,
+  radius: number,
+  depth: number,
+  chamfer: number,
+): number {
+  const maxRadius = Math.min(width, height) / 2
+  const roundness = maxRadius > 0 ? Math.min(radius, maxRadius) / maxRadius : 0
+  return Math.max(chamfer, roundness * (depth / 2))
+}
 
 const vertexShader = /* glsl */ `
 varying float vFaceness;
@@ -56,6 +86,22 @@ void main() {
   #include <colorspace_fragment>
 }
 `
+
+/**
+ * Rings across the edge profile, scaled to how far it rolls.
+ *
+ * A chamfer is two triangles' worth of shading and needs nothing more; a full
+ * roll is a quarter-circle and creases visibly at that count. Interpolating
+ * keeps the flat cards — which is most of them — as cheap as they were.
+ */
+function bevelRings(inset: number, depth: number, chamfer: number): number {
+  const span = depth / 2 - chamfer
+  const rolled =
+    span > 0 ? THREE.MathUtils.clamp((inset - chamfer) / span, 0, 1) : 0
+  return Math.round(
+    MIN_BEVEL_SEGMENTS + rolled * (MAX_BEVEL_SEGMENTS - MIN_BEVEL_SEGMENTS),
+  )
+}
 
 /** Traces a rounded rectangle centred on the origin. */
 function roundedRect(width: number, height: number, radius: number): THREE.Shape {
@@ -89,18 +135,25 @@ function roundedRect(width: number, height: number, radius: number): THREE.Shape
 
 /**
  * Builds the card solid. `width`, `height` and `depth` describe the finished
- * object including its bevel, and the front face lands on z = 0 so callers can
- * place a label without knowing how the extrusion was assembled.
+ * object including its rolled edge, and the front face lands on z = 0 so callers
+ * can place a label without knowing how the extrusion was assembled.
+ *
+ * `chamfer` is the smallest edge a card ever gets — what a square-cornered card
+ * keeps so its edges catch light instead of reading as a cut.
  */
 export function createCardGeometry(
   width: number,
   height: number,
   radius: number,
   depth: number,
-  bevel: number,
+  chamfer: number,
 ): THREE.ExtrudeGeometry {
+  const bevel = edgeRoll(width, height, radius, depth, chamfer)
+
   // A bevel grows the profile outwards on every axis, so shrink by exactly that
-  // much first and the finished solid lands on the requested dimensions.
+  // much first and the finished solid lands on the requested dimensions. At a
+  // full roll the inset eats the whole depth, leaving two quarter-circles that
+  // meet: a capsule, with no flat side left between them.
   const inset = Math.max(
     Math.min(bevel, width / 2, height / 2, depth / 2),
     0,
@@ -117,7 +170,7 @@ export function createCardGeometry(
       bevelThickness: inset,
       bevelSize: inset,
       bevelOffset: 0,
-      bevelSegments: BEVEL_SEGMENTS,
+      bevelSegments: bevelRings(inset, depth, chamfer),
       curveSegments: CURVE_SEGMENTS,
     },
   )

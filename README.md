@@ -1,7 +1,7 @@
 # xrml
 
-Spatial UI as native web components. Utility classes in, 3D buttons out — no
-WebGL knowledge needed to use it, no framework required to install it.
+Spatial UI as native web components. Ordinary CSS in, 3D buttons out — no WebGL
+knowledge needed to use it, no framework required to install it.
 
 ```html
 <xr-button
@@ -11,16 +11,23 @@ WebGL knowledge needed to use it, no framework required to install it.
 >Click me</xr-button>
 ```
 
-That's the whole API surface for a button. `class` is parsed like Tailwind and
-drawn onto a texture; `onclick` is a real inline handler that a real `MouseEvent`
-triggers.
+That's the whole API surface for a button. The style comes from the browser's
+own computed style, so this works identically:
+
+```html
+<xr-button class="btn btn-primary">daisyUI</xr-button>
+<xr-button style="background: #7c3aed; padding: 1rem">inline</xr-button>
+<xr-button class="my-own-class">a plain stylesheet</xr-button>
+```
+
+`onclick` is a real inline handler, triggered by a real `MouseEvent`.
 
 ## Status
 
 **v0 foundation.** One element (`<xr-button>`), the style pipeline behind it, and
-the scene and interaction plumbing they sit on. Verified in headless Chromium:
-renders, hover-swaps, dispatches native clicks that bubble, and rebuilds when the
-DOM changes. Not published, not versioned, no framework wrappers.
+the scene and interaction plumbing they sit on. Not published, not versioned, no
+framework wrappers, **no test suite** — behaviour has been checked with ad-hoc
+headless Chromium runs, not by anything that would catch a regression.
 
 ## Run
 
@@ -58,26 +65,137 @@ Nothing prompts for permission during this check: `isSessionSupported()` is
 specified never to prompt. Any consent request happens at `requestSession()`,
 which needs a user gesture — so it can only appear after you press the button.
 
-## Supported utility classes
+## Styling
 
-| Group | Tokens |
+**xrml does not parse your class names.** A spatial element is a real element in
+a real document, so the browser has already resolved its style — the cascade,
+custom properties, `calc()`, `color-mix()`, media queries, cascade layers, every
+stylesheet on the page. xrml reads that back with `getComputedStyle`.
+
+That is why there is no list of supported utilities. Tailwind, daisyUI, `@apply`,
+a hand-written stylesheet, an inline `style` attribute and your own custom
+properties all work, and compose exactly the way they do everywhere else on the
+page. A component class carries no size or colour in its *name* — daisyUI's
+`.btn` is `--btn-bg`, `var(--size)` and `color-mix()` — and no amount of class
+parsing would ever have reached it.
+
+Elements are `display: none`, which is load-bearing: a non-rendered element still
+resolves every property, but it runs no transitions, so a hover colour reads as
+its settled target instead of whatever frame an animation happens to be on.
+
+### What gets read
+
+| Property | Becomes |
 | --- | --- |
-| Background | `bg-<color>`, `bg-transparent`, `bg-[#hex]` |
-| Text colour | `text-<color>`, `text-[#hex]` |
-| Text size | `text-xs` … `text-5xl` |
-| Font weight | `font-light` … `font-extrabold` |
-| Padding | `p-*`, `px-*`, `py-*`, `pt-*`, `pr-*`, `pb-*`, `pl-*` |
-| Radius | `rounded`, `rounded-none\|sm\|md\|lg\|xl\|2xl\|3xl\|full` |
-| Variant | `hover:` on any of the above |
+| `background-color` | Card colour and, via its alpha, its opacity |
+| `color` | Label colour |
+| `font-size` | Label size |
+| `font-weight` | Nearest bundled Inter weight |
+| `border-top-left-radius` | Corner radius (`%` resolves against the shorter side) |
+| `padding-*` | Space around the label |
+| `width` / `height` | Explicit size, overriding the content |
+| `min-width` / `min-height` | Floor on that size |
+| `--xr-depth` | Card thickness |
 
-Colours come from a curated palette in [src/style/tokens.ts](src/style/tokens.ts)
-that mirrors Tailwind's naming (`teal-500`, `slate-700`, `white`). It's a subset —
-extend it by adding rows, or sidestep it entirely with an arbitrary value like
-`bg-[#7c3aed]`.
+Shorthands need no special handling — computed style hands back longhands, so
+`padding-inline` and `padding` arrive already split into four sides.
 
-Unrecognised classes are ignored rather than reported, because the `class`
-attribute is shared with ordinary CSS and an element may carry classes this
-parser knows nothing about.
+Explicit `width`/`height` include the padding, matching `box-sizing: border-box`.
+This is what makes a component class work: daisyUI's `.btn` sizes itself with
+`height: 40px` and *zero* vertical padding, which a content-box-only layout can't
+express. `auto` and percentage sizes come back as "unset" and the content decides
+— there is no containing block to resolve them against.
+
+### What isn't read
+
+Borders, `box-shadow`, gradients and `background-image`, element `opacity`, and
+`transform`. `font-family` is ignored: SDF text needs real glyph outlines, so
+only the bundled Inter is available and the weight is matched to it.
+
+### Defaults and the cascade
+
+`<xr-button>`'s built-in look is CSS, not a JS fallback, declared in a cascade
+layer named `xrml`:
+
+```css
+@layer xrml {
+  xr-button { background-color: #334155; padding: 0.75rem 1.25rem; /* … */ }
+}
+```
+
+xrml inserts that as the document's *first* stylesheet, and the position is
+deliberate: layers rank by where they are first declared, so declaring `xrml`
+before Tailwind declares `utilities` is what puts the defaults underneath
+anything you write. Appending instead would rank `xrml` last and the defaults
+would beat `bg-teal-500`.
+
+One consequence: a reset that resets *everything* outranks them too. On a
+Tailwind page, preflight's `*{padding:0}` sits in `@layer base`, above `xrml`, so
+an unstyled `<xr-button>` has no padding — exactly what happens to a real
+`<button>` on the same page.
+
+`display: none` is declared *outside* the layer, so a component class that sets
+`display: inline-flex` (daisyUI's `.btn` does) can't drag the source markup back
+into the page.
+
+### Hover
+
+A raycast is not a DOM hover, so no `:hover` rule will ever match a spatial
+element. Rather than re-implement the cascade, xrml mirrors it: every `:hover`
+rule in the document is copied once with `:hover` rewritten to `.xrml-hover`, and
+re-declared into the same cascade layer so the copy wins the tie on order.
+Reading a hover style is then add-class, read, remove-class.
+
+Both `hover:bg-teal-400` and `.btn:hover` land through the same mechanism, with
+nothing special-cased for either.
+
+**Hover changes colour only.** The full hover style is resolved, but only the
+background colour, its alpha, and the label colour are applied — resizing a card
+under the pointer would shift it out from under you and oscillate.
+
+### Depth
+
+Thickness is the one property with no CSS equivalent to read, because a
+stylesheet has no depth axis. xrml adds one as a custom property rather than
+inferring it from something that doesn't mean thickness:
+
+```css
+xr-button.chunky { --xr-depth: 15px }
+#panel          { --xr-depth: 2rem }   /* inherits to every card inside */
+```
+
+It is registered with `@property` as a `<length>`, so the browser computes it —
+`1rem`, `calc(2 * 6px)` and inheritance all resolve before xrml sees it, and the
+registration carries the `5px` default. An unregistered custom property would
+arrive as a verbatim string and put unit maths back in JS, which is the job this
+pipeline exists to avoid.
+
+Corner radius also drives the depth axis. The roll tracks how round the
+silhouette is *relative to its own maximum*, not an absolute pixel amount — the
+card is only 5 design px deep, so comparing radii in pixels would saturate at
+`rounded-sm` and every button would look the same. `rounded-none` keeps a bare
+chamfer; `rounded-full` rolls the full half-depth into a capsule.
+
+### Themes
+
+Theme swaps are addressed at the document, not at the element, so there is
+nothing on the element to observe — daisyUI's theme controller is pure CSS
+(`:root:has(input.theme-controller[value=aqua]:checked)`) and mutates no
+attribute at all. xrml watches the causes instead — `change`/`click` in the
+capture phase, `data-theme`/`class`/`style` on `<html>`, and `<head>` mutations —
+and compares a fingerprint of every custom property on `:root`.
+
+daisyUI only emits `light` and `dark` unless told otherwise, so a theme has to be
+named before `data-theme` can select it:
+
+```css
+@plugin "daisyui" {
+  themes: light --default, dark --prefersdark, cyberpunk, retro, valentine, aqua;
+}
+```
+
+Note that only *theme* colours follow a theme. `bg-teal-500` is a fixed palette
+value and stays put; `bg-primary` and `.btn-primary` change.
 
 ## Attributes
 
@@ -87,8 +205,8 @@ parser knows nothing about.
 | `rotation` | `"x y z"` in **degrees** (A-Frame's convention) |
 | `scale` | `"x y z"`, defaults to `1 1 1` |
 
-All of them, plus `class` and the element's text, are live: change one and the
-scene rebuilds on the next microtask.
+All of them, plus `class`, `style`, the page's theme, and the element's text, are
+live: change one and the scene rebuilds on the next microtask.
 
 ## How it fits together
 
@@ -98,16 +216,21 @@ src/
     stage.ts        one scene/renderer/camera per document, created lazily
     interaction.ts  shared raycaster; mouse + XR controller rays
   style/
-    tokens.ts       palette, spacing, radii, type scale, world-unit scale
-    parse.ts        class string -> resolved base + hover styles
+    computed.ts     getComputedStyle -> resolved Style; owns --xr-depth
+    hover.ts        mirrors every :hover rule onto a class we can apply
+    theme.ts        notices document-level style changes
     card.ts         extruded rounded-rect geometry + normal-baked shading
     fonts.ts        font weight -> bundled Inter file
+    units.ts        design pixels <-> world units, card constants
   elements/
-    base.ts         XRElement: transforms, lifecycle, invalidation
+    base.ts         XRElement: transforms, lifecycle, invalidation, defaults
     xr-button.ts    <xr-button>
 ```
 
-Five design points worth knowing:
+Design points worth knowing:
+
+**The browser is the style engine.** See [Styling](#styling) — it's the whole
+idea, and everything else follows from it.
 
 **A button is one solid, not a face with a box behind it.** The body is a single
 rounded-rectangle profile extruded through the depth, so the silhouette, the
@@ -145,29 +268,43 @@ in a headset.
 
 ## Known gaps
 
+- **No tests.** The single largest gap. A project whose whole claim is CSS
+  fidelity has nothing that would catch fidelity regressing.
+- **Computed values are not used values.** Reading resolved style gets you
+  everything *except* layout: no resolved percentages, no `auto` widths, no
+  intrinsic sizing, no wrapping. This is a consequence of the core design, not a
+  missing feature — a container element with children that flow would mean either
+  participating in real offscreen layout (giving up the properties `display:none`
+  buys) or reimplementing a layout engine. That fork is undecided.
+- **No layout, and one element.** Everything is positioned absolutely. No panel,
+  text, image or container elements yet.
+- **Rebuilds are all-or-nothing.** Any change disposes the geometry and re-syncs
+  the label; a theme swap invalidates every element at once. A colour-only change
+  should patch a uniform instead, and doesn't.
+- **The hover mirror is the riskiest code here.** Nested rules, `@media`,
+  `@supports`, `@layer` and `@import` are handled; `@scope`, named `@container`,
+  anonymous layers and `:hover` inside `:is()`/`:not()` are not, and every failure
+  mode is silent — hover just stops changing.
+- **Borders and shadows are read as CSS but not drawn.** A daisyUI button will
+  look flatter than it does on the page.
 - **iOS Safari has no WebXR.** The scene still renders as an ordinary 3D canvas
   and the launcher says so, but there's no immersive mode on iPhone. A real
   fallback (App Clip, 8th Wall, or documented non-support) is still an open call.
 - **Latin only.** Inter's latin subset is bundled, one file per weight. Other
   scripts render blank. troika can resolve fonts per script, but only through a
   CDN lookup this deliberately avoids — self-hosting that data is the fix.
-- **`hover:` changes colour only.** `hover:bg-*` and `hover:text-<color>` work.
-  Size-affecting tokens under `hover:` (`hover:text-lg`, `hover:p-6`) parse but
-  aren't applied: resizing a card on hover would shift it out from under the
-  pointer and oscillate.
 - **No lighting, shadows or occlusion.** Shading is a fixed front-to-side
   falloff, so cards never pick up the colour of the room around them. That's a
   deliberate trade for exact colours; it will look flat next to lit content.
 - **~2k triangles per button.** The extrusion is tessellated at 20 segments per
   corner. Fine for a panel of controls, worth revisiting for hundreds of them.
-- **The label is still its own mesh.** It's painted flush onto the front face
-  via a polygon offset, so it reads as one object, but it is a second draw call.
+- **Hit-testing is linear.** Every pointer move intersects every registered mesh,
+  with no spatial index.
+- **The label is still its own mesh.** It's painted flush onto the front face via
+  a polygon offset, so it reads as one object, but it is a second draw call.
   Genuinely merging it would mean sampling glyph SDFs inside the card shader and
   giving up troika's layout and font handling.
 - **Layout is async.** troika measures text off the main thread, so a button
   exists for a frame or two before its card is sized and becomes clickable.
-- **No layout.** Every element is positioned absolutely. Flex-like stacking
-  between elements isn't implemented.
-- **One element.** No panel, text, image, or container elements yet.
 - **`position` is coordinates only.** No WebXR hit-test anchoring to real-world
   surfaces.
