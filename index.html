@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>xrml</title>
+  </head>
+  <body>
+    <div id="chrome">
+      <h1>xrml</h1>
+      <p>Spatial UI as web components. Drag to look around, click a button.</p>
+      <p id="log">nothing yet</p>
+    </div>
+
+    <xr-button
+      class="bg-teal-500 hover:bg-teal-400 text-white p-4 rounded-lg text-lg"
+      position="-0.42 1.62 -1.5"
+      onclick="xrmlLog('teal')"
+      >Click me</xr-button
+    >
+
+    <xr-button
+      class="bg-slate-700 hover:bg-slate-600 text-slate-100 px-6 py-3 rounded-full"
+      position="0.42 1.62 -1.5"
+      onclick="xrmlLog('pill')"
+      >Rounded full</xr-button
+    >
+
+    <xr-button
+      class="bg-[#7c3aed] hover:bg-[#a78bfa] text-white p-3 rounded-2xl text-sm font-bold"
+      position="-0.42 1.28 -1.5"
+      rotation="0 12 0"
+      onclick="xrmlLog('arbitrary colour')"
+      >Arbitrary hex</xr-button
+    >
+
+    <xr-button
+      class="bg-rose-500 hover:bg-rose-400 text-white px-5 py-4 rounded-sm text-xl"
+      position="0.42 1.28 -1.5"
+      rotation="0 -12 0"
+      onclick="xrmlLog('rose')"
+      >Rotated</xr-button
+    >
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
