@@ -308,3 +308,106 @@ in a headset.
   exists for a frame or two before its card is sized and becomes clickable.
 - **`position` is coordinates only.** No WebXR hit-test anchoring to real-world
   surfaces.
+
+## Roadmap
+
+The elements worth building next are not the same size, and ordering them by
+name hides why. Each is gated on a subsystem that doesn't exist yet, and the
+subsystem is the real work:
+
+| Missing subsystem | Why there isn't one |
+| --- | --- |
+| States beyond `:hover` | `hover.ts` mirrors one pseudo-class, hardcoded |
+| Write-back, scene to DOM | Values only ever flow DOM to scene |
+| Pointer geometry and capture | `interaction.ts` keeps the hit object, not the hit point |
+| Layout | Undecided — see [Known gaps](#known-gaps) |
+
+Which is what actually orders the elements:
+
+| Element | Needs |
+| --- | --- |
+| `<xr-text>` | nothing new |
+| `<xr-image>` | nothing new |
+| `<xr-toggle>` | states, write-back |
+| `<xr-slider>` | write-back, pointer capture |
+| `<xr-panel>` | layout |
+| `<xr-select>` | all four, plus a popup layer |
+
+### Next
+
+**`<xr-text>`** is `<xr-button>` without the card or the hit target, and the
+payoff is larger than the diff. troika takes a `maxWidth` and wraps text itself,
+so reading `max-width` off computed style buys real line wrapping — the one
+place where layout is already solved by a dependency that is already here.
+
+It also forces two fixes the button needs anyway: `LINE_HEIGHT` is a constant
+where it should be the computed `line-height`, and the card is sized from a
+single line of text when `blockBounds` already carries the measured height and
+only its width is being read.
+
+**`:active`** is not an element and is the cheapest real improvement here.
+`whileHovered` becomes `whileMatching(element, ':active', …)` and the rule walk
+takes the pseudo-class as a parameter; the press events already exist in
+`interaction.ts`, they just aren't kept as state. Worth doing early because a
+headset gives no haptic confirmation of a press, so a button that doesn't
+visibly respond to being pressed reads as broken in a way it doesn't on a
+desktop.
+
+**`<xr-image>`** samples a texture on the front face instead of returning a flat
+colour. Two things to solve. `ExtrudeGeometry`'s UVs are world-space rather than
+0–1 across the face, so the face UV wants deriving in the fragment shader from
+the object-space position and the card's size — which handles the rolled edge in
+the same expression. And it is the only element with a genuine *intrinsic* size,
+so `width: auto` finally has an answer that isn't "the content decides", and
+`object-fit` becomes one more property read straight off the browser. It also
+retires `background-image` from the list of things not read.
+
+### One subsystem each
+
+**`<xr-toggle>` / `<xr-checkbox>`** comes before the slider. It is the cheapest
+element that has to write back to the DOM, because a click flips it and no drag
+is involved: set `checked`, dispatch a real `input` and `change`, and let the
+page's own handlers run. `:checked` then resolves through the generalised state
+mirror, so daisyUI's `.toggle:checked` works with nothing special-cased — the
+same result the hover mirror already gets, extended to state.
+
+**`<xr-slider>`** is what forces the interaction work. The intersection point has
+to survive `firstHit`, and a press has to capture the pointer so that a drag
+wandering off the thumb keeps tracking instead of dropping. The fill is cheaper
+as a term in the card shader than as a second mesh, and keeps a control one
+solid.
+
+### The fork
+
+**`<xr-panel>`** is the container question, and it is a fork rather than a queue
+position.
+
+The framing above is offscreen layout *or* a reimplemented layout engine. There
+is a third option: keep the authored element `display: none` and clone the
+subtree into an off-screen host that *is* laid out — `position: fixed;
+visibility: hidden`, with transitions and animations forced off. A
+`getBoundingClientRect()` per child then gives flexbox, grid, `gap`, resolved
+percentages, wrapping and intrinsic sizing, and the scene places children at the
+offsets the browser computed. The browser as the layout engine, for the same
+reason it is already the style engine.
+
+What `display: none` actually buys is a style with no transition running through
+it. Forcing transitions off in the host buys that directly, rather than buying it
+by not laying out at all. The costs are real and worth stating up front: a layout
+pass per rebuild, a containing block that has to be given the panel's own width
+before percentages mean anything, `overflow` with no sensible meaning on a solid,
+and a clone that must be `inert` with its ids stripped so the measuring copy is
+never mistaken for the document.
+
+**`<xr-select>`** goes last. It composes the state mirror, write-back and layout,
+then adds a popup layer with a dismiss model and depth sorting on top — in 3D a
+dropdown that opens behind the panel it belongs to is a real failure, not a
+`z-index`. Once panels exist it can ship first as a radio group inside one, which
+needs no popup at all.
+
+### Before any of it
+
+Tests. Already the first entry in [Known gaps](#known-gaps), and every element
+above multiplies the surface they would cover. Computed-style fidelity is
+unusually testable without a headset: build an element, read the card's uniforms
+and geometry bounds back, and compare them against the CSS that produced them.
